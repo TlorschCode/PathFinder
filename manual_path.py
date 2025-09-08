@@ -132,6 +132,9 @@ def draw_bezier(screen):
                 prev_p = ctrl_pts[0]
             except IndexError:
                 pass
+            else:
+                draw.line(screen, (160, 160, 160), (pt1.getx(), pt1.gety()), (ctrl_pts[0].getx(), ctrl_pts[0].gety()), line_size)
+                draw.line(screen, (160, 160, 160), (pt2.getx(), pt2.gety()), (ctrl_pts[len(ctrl_pts) - 1].getx(), ctrl_pts[len(ctrl_pts) - 1].gety()), line_size)
             for p in ctrl_pts:
                 draw.circle(screen, (150, 150, 150), (p.getx(), p.gety()), ctrl_pt_size)
                 draw.line(screen, (160, 160, 160), (prev_p.getx(), prev_p.gety()), (p.getx(), p.gety()), line_size)
