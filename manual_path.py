@@ -3,6 +3,8 @@ import numpy as np
 from PIL import Image
 from math import sqrt
 import pygame
+from path_save import saved
+from bezier_classes import Path, Location
 
 # --- CONFIG ---
 IMAGE_FILE = "CrashSite.png"
@@ -21,20 +23,11 @@ COLOR_MAP = {
     (63, 63, 63): "GRAY"
 }
 
-paths = [
-    {"path_pt1": None, "path_pt2": None, "control_pts": [], "locked": False}
-]
+paths = [Path(None, None)]
 
 ctrl_pt_size = 5
 line_size = 2
 dragging_point = None
-
-
-# --- CLASSES ---
-class Location:
-    def __init__(self, x_, y_):
-        self.x = x_
-        self.y = y_
 
 
 # --- UTILITY FUNCTIONS ---
@@ -82,10 +75,10 @@ def get_bezier_loc(level_, t_) -> Location:
     return Location(int(round(lvl[0].x)), int(round(lvl[0].y)))
 
 
-def path_score(path, terrain, width=1024, height=800, curve_steps=500):
-    ctrl_pts = path["control_pts"]
-    pt1 = path["path_pt1"]
-    pt2 = path["path_pt2"]
+def path_score(path: Path, terrain, width, height, curve_steps=500):
+    ctrl_pts = path.control_pts
+    pt1 = path.path_pt1
+    pt2 = path.path_pt2
 
     if not (pt1 and pt2) or len(ctrl_pts) == 0:
         return 0
@@ -113,7 +106,7 @@ def path_score(path, terrain, width=1024, height=800, curve_steps=500):
 
                 step_dx = x - prev_px
                 step_dy = y - prev_py
-                pixel_dist = (step_dx ** 2 + step_dy ** 2) ** 0.5
+                pixel_dist = sqrt(step_dx ** 2 + step_dy ** 2)
                 feet_dist = pixel_dist / PX_PER_FOOT
 
                 speed = MOVE_MULT if tile == "CLEAR" else DEBRIS_SPEED
@@ -129,34 +122,43 @@ def path_score(path, terrain, width=1024, height=800, curve_steps=500):
     return total_time
 
 
+def score_all_paths(terrain, width=1024, height=800, curve_steps=500):
+    total_time = 0
+    for p in paths:
+        total_time += path_score(p, terrain, width, height)
+    return total_time
+
 # --- DRAWING FUNCTIONS ---
 def draw_bezier(screen):
     global ctrl_pt_size, line_size, paths
     prev_p = Location(0, 0)
+    main_points_color = (100, 100, 100)
+    control_line_color = (160, 160, 160)
+    control_point_color = (160, 160, 160)
     for path in paths:
-        pt1 = path["path_pt1"]
-        pt2 = path["path_pt2"]
-        ctrl_pts = path["control_pts"]
+        pt1 = path.path_pt1
+        pt2 = path.path_pt2
+        ctrl_pts = path.control_pts
         if not (pt1 is None or pt2 is None):
-            # Draw control points
-            pygame.draw.circle(screen, (100, 100, 100), (pt1.x, pt1.y), ctrl_pt_size)
-            pygame.draw.circle(screen, (100, 100, 100), (pt2.x, pt2.y), ctrl_pt_size)
-
+            # Draw main control points  vvv
+            pygame.draw.circle(screen, main_points_color, (pt1.x, pt1.y), ctrl_pt_size)
+            pygame.draw.circle(screen, main_points_color, (pt2.x, pt2.y), ctrl_pt_size)
+            # vvv  Draw control point lines  vvv
             try:
                 prev_p = ctrl_pts[0]
             except IndexError:
                 pass
             else:
-                pygame.draw.line(screen, (160, 160, 160), (pt1.x, pt1.y), (ctrl_pts[0].x, ctrl_pts[0].y), line_size)
-                pygame.draw.line(screen, (160, 160, 160), (pt2.x, pt2.y),
+                pygame.draw.line(screen, control_line_color, (pt1.x, pt1.y), (ctrl_pts[0].x, ctrl_pts[0].y), line_size)
+                pygame.draw.line(screen, control_line_color, (pt2.x, pt2.y),
                                  (ctrl_pts[-1].x, ctrl_pts[-1].y), line_size)
-
+            # vvv  Draw extra control points  vvv
             for p in ctrl_pts:
                 pygame.draw.circle(screen, (150, 150, 150), (p.x, p.y), ctrl_pt_size)
-                pygame.draw.line(screen, (160, 160, 160), (prev_p.x, prev_p.y), (p.x, p.y), line_size)
+                pygame.draw.line(screen, control_line_color, (prev_p.x, prev_p.y), (p.x, p.y), line_size)
                 prev_p = p
 
-            # Draw Bezier curve
+            # vvv  Draw Bezier curve  vvv
             full_path = [pt1] + ctrl_pts + [pt2]
             steps = 200
             for s in range(steps + 1):
@@ -169,9 +171,9 @@ def add_path_point(pos: Location, click: str):
     global ctrl_pt_size, dragging_point
 
     for path in paths:
-        pt1 = path["path_pt1"]
-        pt2 = path["path_pt2"]
-        ctrl_pts = path["control_pts"]
+        pt1 = path.path_pt1
+        pt2 = path.path_pt2
+        ctrl_pts = path.control_pts
 
         if click.lower() == "left":
             # Grab existing points
@@ -182,21 +184,60 @@ def add_path_point(pos: Location, click: str):
 
             # Add new point
             if pt1 is None:
-                path["path_pt1"] = pos
+                path.setPt1(pos)
             elif pt2 is None:
-                path["path_pt2"] = pos
-            elif not path["locked"]:
-                path["control_pts"].append(pos)
+                path.setPt2(pos)
+            elif not path.locked:
+                path.addCtrlPt(pos)
 
         elif click.lower() == "right":
-            paths.append({"path_pt1": pos, "path_pt2": None, "control_pts": [], "locked": False})
-            paths[-2]["locked"] = True
+            paths.append(Path(pos, None))
+            paths[-2].lock() # Lock previous path (wraps by using a negative index)
             return
+
+
+def remove_path_pts(pos: Location):
+    for path in paths:
+        pt1 = path.path_pt1
+        pt2 = path.path_pt2
+        ctrl_pts = path.control_pts
+        # Grab existing points
+        for p in ([pt1, pt2] + ctrl_pts):
+            if p and distance(p.x, p.y, pos.x, pos.y) <= ctrl_pt_size + 3:
+                if p == pt1 or p == pt2:
+                    paths.remove(path)
+                    return
+                path.control_pts.remove(p)
+                return
+
+
+def save_path() -> str:
+    output = "["
+    for path in paths:
+        ctrl_pts_text = "["
+        if len(path.control_pts) > 0:
+            for pt in path.control_pts:
+                if path.control_pts.index(pt) != len(path.control_pts) - 1:
+                    ctrl_pts_text += f"Location({pt.x}, {pt.y}), "
+                else:
+                    ctrl_pts_text += f"Location({pt.x}, {pt.y})]"
+        else:
+            ctrl_pts_text = "[]"
+        try:
+            if paths.index(path) != len(paths) - 1:
+                output += f"Path(Location({path.path_pt1.x}, {path.path_pt1.y}), Location({path.path_pt2.x}, {path.path_pt2.y}), {ctrl_pts_text}, {path.locked}), " # type: ignore
+            else:
+                output += f"Path(Location({path.path_pt1.x}, {path.path_pt1.y}), Location({path.path_pt2.x}, {path.path_pt2.y}), {ctrl_pts_text}, {path.locked})]" # type: ignore
+        except ValueError:
+            pass
+    return output
 
 
 # --- MAIN ---
 def main():
     global dragging_point
+    global paths
+    paths = saved
     terrain, width, height, surface = load_image_as_terrain(IMAGE_FILE)
     pygame.init()
     pygame.font.init()
@@ -211,26 +252,41 @@ def main():
 
     running = True
     while running:
+        mouse_click = ""
+        mouse_pos = Location(None, None)
         for evnt in pygame.event.get():
             if evnt.type == pygame.QUIT:
                 running = False
             elif evnt.type == pygame.MOUSEBUTTONDOWN:
-                if evnt.button == 1:
-                    add_path_point(Location(evnt.pos[0], evnt.pos[1]), "left")
-                elif evnt.button == 3:
+                mods = pygame.key.get_mods()
+                if evnt.button == 1:  # Left click
+                    if mods & pygame.KMOD_CTRL:  # Ctrl held
+                        remove_path_pts(Location(evnt.pos[0], evnt.pos[1]))
+                    else:
+                        add_path_point(Location(evnt.pos[0], evnt.pos[1]), "left")
+                elif evnt.button == 3:  # Right click
                     add_path_point(Location(evnt.pos[0], evnt.pos[1]), "right")
             elif evnt.type == pygame.MOUSEBUTTONUP:
+                mouse_click = ""
                 if evnt.button == 1:
                     dragging_point = None
             elif evnt.type == pygame.MOUSEMOTION:
+                mouse_pos = Location(evnt.pos[0], evnt.pos[1])
                 hover_point = evnt.pos
                 if dragging_point:
                     dragging_point.x = evnt.pos[0]
                     dragging_point.y = evnt.pos[1]
-            elif evnt.type == pygame.KEYDOWN:
+            elif evnt.type == pygame.KEYDOWN:  # Calculate path times
                 if evnt.key == pygame.K_SPACE and paths:
-                    score = path_score(paths[0], terrain, width, height)
+                    score = score_all_paths(terrain, width, height)
                     print(f"Path score: {score:.2f} seconds")
+                elif evnt.key == pygame.K_s and paths:
+                    with open("path_save.py", "w") as file:
+                        file.write(f"from bezier_classes import Path, Location\nsaved = {save_path()}")
+                if evnt.key == pygame.K_LCTRL:
+                    if mouse_click != "":
+                        print("REMOVING PT")
+                        remove_path_pts(mouse_pos)
 
         screen.blit(surface, (0, 0))
         draw_bezier(screen)

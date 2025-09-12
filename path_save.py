@@ -1,0 +1,2 @@
+from bezier_classes import Path, Location
+saved = [Path(Location(767, 415), Location(820, 90), [Location(932, 261)], True), Path(Location(549, 200), Location(404, 366), [Location(410, 258), Location(524, 273), Location(506, 194)], True), Path(Location(432, 400), Location(530, 502), [Location(502, 410)], True)]
