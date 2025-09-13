@@ -32,13 +32,14 @@ line_size = 2
 dragging_point = None
 
 
-# --- UTILITY FUNCTIONS ---
+#|  --- UTILITY FUNCTIONS ---  |#
 def distance(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
     return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
+#|  --- TERRAIN FUNCTIONS ---  |#
 def closest_color(rgb, color_map, max_dist=5):
     """Return terrain type if within max_dist in RGB, else CLEAR."""
     r, g, b = map(int, rgb)
@@ -65,6 +66,7 @@ def load_image_as_terrain(image_file):
     return terrain, w, h, surface_
 
 
+#|  --- BEZIER FUNCTIONS ---  |#
 def get_bezier_loc(level_, t_) -> Location:
     lvl = level_
     while len(lvl) > 1:
@@ -132,7 +134,7 @@ def score_all_paths(terrain, width=1024, height=800, curve_steps=500):
         total_time += path_score(p, terrain, width, height)
     return total_time
 
-# --- DRAWING FUNCTIONS ---
+
 def draw_bezier(screen):
     global ctrl_pt_size, line_size, paths
     prev_p = Location(0, 0)
@@ -217,6 +219,7 @@ def remove_path_pts(pos: Location | None):
                 return
 
 
+#|  --- SAVE PATH FUNCTIONS ---  |#
 def save_path() -> str:
     output = "["
     for path in paths:
@@ -241,7 +244,7 @@ def save_path() -> str:
             output = "[Path(None, None)]"
     return output
 
-#| --- PATH FILE HANDLERS ---
+
 def save_paths():
     global paths
     try:
@@ -276,7 +279,7 @@ def reset_paths():
     print("Paths reset (runtime only).")
 
 
-#| --- CHECK EVENTS ---
+#|  --- USER INTERACTION ---  |#
 def check_events(terrain, width, height):
     global dragging_point, paths, score, running, hover_point
     for evnt in pygame.event.get():
@@ -321,9 +324,7 @@ def check_events(terrain, width, height):
                     score = score_all_paths(terrain, width, height)
 
 
-
-
-# --- MAIN ---
+#|  --- MAIN ---  |#
 def main():
     global dragging_point
     global paths
