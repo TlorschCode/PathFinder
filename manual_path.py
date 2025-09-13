@@ -34,6 +34,7 @@ terrain = []
 width = 1024
 height = 800
 surface = 0
+score = 0
 screen = pygame.display.set_mode((width, height))
 pygame.display.set_caption("Path Visualizer")
 
@@ -105,10 +106,10 @@ def path_score(path: Path, curve_steps=500):
 
     if not (pt1 and pt2) or len(ctrl_pts) == 0:
         return 0
-
     full_path = [pt1] + ctrl_pts + [pt2]
     total_time = 0
     prev_px, prev_py = None, None
+    prev_tile = "CLEAR"
 
     for s in range(curve_steps + 1):
         t = s / curve_steps
@@ -133,10 +134,22 @@ def path_score(path: Path, curve_steps=500):
                 feet_dist = pixel_dist / PX_PER_FOOT
 
                 speed = MOVE_MULT if tile == "CLEAR" else DEBRIS_SPEED
-                climb_time = feet_dist * 999999 if tile == "GRAY" else 0
+                climb_time = 0
+                if tile == "GRAY":
+                    climb_time = feet_dist * 999999
+                elif tile == "ORANGE" and ground_colors[prev_tile] < ground_colors["ORANGE"]:
+                    climb_time = feet_dist * 1
+                elif tile == "PURPLE" and ground_colors[prev_tile] < ground_colors["PURPLE"]:
+                    climb_time = feet_dist * 2.5
+                elif tile == "BLUE":
+                    climb_time = feet_dist * 4
                 move_time = feet_dist / speed
+                prev_tile = tile
 
                 total_time += climb_time + move_time
+                # --- DEBUG: print climb penalties for any non-clear tile ---
+                if tile != "CLEAR":
+                    print(f"Climb penalty on {tile} at ({x},{y}): {feet_dist:.2f} ft -> {climb_time:.2f} s")
 
                 prev_px, prev_py = x, y
         else:
@@ -377,7 +390,7 @@ def render_graph():
     min_score = 2000
     for path_list in prev_paths:
         cur_score = score_all_paths(path_list)
-        if 5 < cur_score < 2000:
+        if 5 < cur_score < 5000:
             max_score = max(max_score, cur_score)
             min_score = min(min_score, cur_score)
     # --- Draw paths with normalized color ---
@@ -393,7 +406,7 @@ def render_graph():
 
 #|  --- MAIN ---  |#
 def main():
-    global dragging_point, paths, terrain, width, height, surface, screen
+    global dragging_point, paths, terrain, width, height, surface, screen, score
     terrain, width, height, surface = load_image_as_terrain(IMAGE_FILE)
     pygame.init()
     pygame.font.init()
@@ -403,12 +416,15 @@ def main():
     clock = pygame.time.Clock()
     font_obj = pygame.font.SysFont(None, 24)
 
-    hover_point = None
-    score = None
+    hover_point = pygame.mouse.get_pos()
+    score = 0
 
     while running:
         check_events()
         screen.blit(surface, (0, 0))
+        score = score_all_paths(paths)
+        hover_point = pygame.mouse.get_pos()
+
         # Display score next to cursor
         if hover_point and score is not None:
             text_surf = font_obj.render(f"{score:.2f} s", True, (0, 0, 0))
@@ -418,7 +434,7 @@ def main():
             screen.blit(text_bg, (hover_point[0] + 10, hover_point[1] + 10))
         if remember_graph:
             store_graph()
-            draw_bezier(paths)
+            draw_bezier(paths, line_size=2)
         elif calculate_graph:
             print("CALCULATING GRAPH")
             render_graph()
@@ -427,7 +443,7 @@ def main():
                 pygame.display.flip()
                 clock.tick(60)
         else:
-            draw_bezier(paths)
+            draw_bezier(paths, line_size=2)
         
         pygame.display.flip()
         clock.tick(60)
