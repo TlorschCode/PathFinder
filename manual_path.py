@@ -5,6 +5,7 @@ from math import sqrt
 import pygame
 from path_save import saved_paths
 from bezier_classes import Path, Location
+import copy
 
 # --- CONFIG ---
 IMAGE_FILE = "CrashSite.png"
@@ -26,9 +27,17 @@ COLOR_MAP = {
 
 paths = [Path(None, None)]
 running = True
+remember_graph = False
+calculate_graph = False
+prev_paths = []
+terrain = []
+width = 1024
+height = 800
+surface = 0
+screen = pygame.display.set_mode((width, height))
+pygame.display.set_caption("Path Visualizer")
 
 ctrl_pt_size = 5
-line_size = 2
 dragging_point = None
 
 
@@ -37,6 +46,13 @@ def distance(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
     return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+
+def map_value(x, in_min, in_max, out_min, out_max):
+    """Maps a value x from one range to another."""
+    if in_max - in_min == 0:  # avoid divide by zero
+        raise ValueError("in_min and in_max cannot be the same")
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
 
 
 #|  --- TERRAIN FUNCTIONS ---  |#
@@ -81,7 +97,8 @@ def get_bezier_loc(level_, t_) -> Location:
     return Location(int(round(lvl[0].x)), int(round(lvl[0].y)))
 
 
-def path_score(path: Path, terrain, width, height, curve_steps=500):
+def path_score(path: Path, curve_steps=500):
+    global terrain, width, height
     ctrl_pts = path.control_pts
     pt1 = path.path_pt1
     pt2 = path.path_pt2
@@ -128,49 +145,62 @@ def path_score(path: Path, terrain, width, height, curve_steps=500):
     return total_time
 
 
-def score_all_paths(terrain, width=1024, height=800, curve_steps=500):
+def score_all_paths(path_list, curve_steps=500):
+    global terrain, width, height
     total_time = 0
-    for p in paths:
-        total_time += path_score(p, terrain, width, height)
+    for p in path_list:
+        p.score = path_score(p)
+        total_time += p.score
     return total_time
 
 
-def draw_bezier(screen):
-    global ctrl_pt_size, line_size, paths
-    prev_p = Location(0, 0)
-    main_points_color = (100, 100, 100)
-    control_line_color = (160, 160, 160)
-    control_point_color = (160, 160, 160)
-    for path in paths:
+def draw_bezier(path_list, path_color=(0, 200, 0, 255), line_size=3, draw_controllers=True):
+    """
+    Draw Bezier curves and control points.
+    path_color can include alpha (R, G, B, A).
+    """
+    global ctrl_pt_size, screen
+
+    # Create a temporary surface with per-pixel alpha
+    temp_surf = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+
+    main_points_color = (100, 100, 100, 255)
+    control_line_color = (160, 160, 160, 255)
+    control_point_color = (150, 150, 150, 255)
+
+    for path in path_list:
         pt1 = path.path_pt1
         pt2 = path.path_pt2
         ctrl_pts = path.control_pts
-        if not (pt1 is None or pt2 is None):
-            # Draw main control points  vvv
-            pygame.draw.circle(screen, main_points_color, tuple(pt1), ctrl_pt_size)
-            pygame.draw.circle(screen, main_points_color, tuple(pt2), ctrl_pt_size)
-            # vvv  Draw control point lines  vvv
-            try:
-                prev_p = ctrl_pts[0]
-            except IndexError:
-                pass
-            else:
-                pygame.draw.line(screen, control_line_color, tuple(pt1), tuple(ctrl_pts[0]), line_size)
-                pygame.draw.line(screen, control_line_color, tuple(pt2),
-                                 (ctrl_pts[-1].x, ctrl_pts[-1].y), line_size)
-            # vvv  Draw extra control points  vvv
-            for p in ctrl_pts:
-                pygame.draw.circle(screen, (150, 150, 150), tuple(p), ctrl_pt_size)
-                pygame.draw.line(screen, control_line_color, tuple(prev_p), tuple(p), line_size)
-                prev_p = p
 
-            # vvv  Draw Bezier curve  vvv
+        if not (pt1 is None or pt2 is None):
+            if draw_controllers:
+                # Draw main points
+                pygame.draw.circle(temp_surf, main_points_color, tuple(pt1), ctrl_pt_size)
+                pygame.draw.circle(temp_surf, main_points_color, tuple(pt2), ctrl_pt_size)
+
+                # Draw control lines
+                if ctrl_pts:
+                    pygame.draw.line(temp_surf, control_line_color, tuple(pt1), tuple(ctrl_pts[0]), line_size)
+                    pygame.draw.line(temp_surf, control_line_color, tuple(pt2),
+                                     (ctrl_pts[-1].x, ctrl_pts[-1].y), line_size)
+                    prev_p = ctrl_pts[0]
+                    for p in ctrl_pts[1:]:
+                        pygame.draw.line(temp_surf, control_line_color, tuple(prev_p), tuple(p), line_size)
+                        prev_p = p
+                    for p in ctrl_pts:
+                        pygame.draw.circle(temp_surf, control_point_color, tuple(p), ctrl_pt_size)
+
+            # Draw Bezier curve
             full_path = [pt1] + ctrl_pts + [pt2]
             steps = 200
             for s in range(steps + 1):
                 t = s / steps
                 draw_pos = get_bezier_loc(full_path, t)
-                pygame.draw.circle(screen, (0, 200, 0), (draw_pos.x, draw_pos.y), line_size)
+                pygame.draw.circle(temp_surf, path_color, (draw_pos.x, draw_pos.y), line_size)
+
+    # Blit the temp surface onto the main screen
+    screen.blit(temp_surf, (0, 0))
 
 
 def add_path_point(pos: Location | None, click: str):
@@ -273,15 +303,17 @@ def load_paths():
 
 
 def reset_paths():
-    global paths
+    global paths, prev_paths
     # Reset runtime paths to a single empty path
+    prev_paths = []
     paths = [Path(None, None)]
     print("Paths reset (runtime only).")
 
 
 #|  --- USER INTERACTION ---  |#
-def check_events(terrain, width, height):
-    global dragging_point, paths, score, running, hover_point
+def check_events():
+    global dragging_point, paths, score, running, hover_point, remember_graph, calculate_graph
+    global terrain, width, height
     for evnt in pygame.event.get():
         pos = getattr(evnt, "pos", None)   # only mouse events have .pos
         loc = Location(*pos) if pos else None
@@ -319,15 +351,49 @@ def check_events(terrain, width, height):
                     load_paths()
                 elif key == pygame.K_s:
                     save_paths()
+                elif key == pygame.K_d:
+                    remember_graph = True
+                elif key == pygame.K_b:
+                    remember_graph = False
+                    calculate_graph = not calculate_graph
             else:
                 if key == pygame.K_SPACE:
-                    score = score_all_paths(terrain, width, height)
+                    score = score_all_paths(paths)
+
+
+#|  --- GRAPH FUNCTIONS ---  |#
+def store_graph():
+    global prev_paths, paths
+    snapshot = copy.deepcopy(paths)
+    if not prev_paths or snapshot != prev_paths[-1]:
+        prev_paths.append(snapshot)
+        print(f"Stored graph snapshot #{len(prev_paths)}")
+
+
+def render_graph():
+    global prev_paths
+    # --- Find score bounds ---
+    max_score = 0
+    min_score = 2000
+    for path_list in prev_paths:
+        cur_score = score_all_paths(path_list)
+        if 5 < cur_score < 2000:
+            max_score = max(max_score, cur_score)
+            min_score = min(min_score, cur_score)
+    # --- Draw paths with normalized color ---
+    for path_list in prev_paths:
+        total_score = sum(path.score for path in path_list)
+        if min_score != max_score:
+            green_val = int(map_value(total_score, min_score, max_score, 0, 255))
+        else:
+            green_val = 128  # fallback if all scores are the same
+        display_color = (0, green_val, 0, green_val)
+        draw_bezier(path_list, display_color, 1, False)
 
 
 #|  --- MAIN ---  |#
 def main():
-    global dragging_point
-    global paths
+    global dragging_point, paths, terrain, width, height, surface, screen
     terrain, width, height, surface = load_image_as_terrain(IMAGE_FILE)
     pygame.init()
     pygame.font.init()
@@ -341,10 +407,8 @@ def main():
     score = None
 
     while running:
-        check_events(terrain, width, height)
+        check_events()
         screen.blit(surface, (0, 0))
-        draw_bezier(screen)
-
         # Display score next to cursor
         if hover_point and score is not None:
             text_surf = font_obj.render(f"{score:.2f} s", True, (0, 0, 0))
@@ -352,7 +416,19 @@ def main():
             text_bg.fill((255, 255, 255))
             text_bg.blit(text_surf, (3, 2))
             screen.blit(text_bg, (hover_point[0] + 10, hover_point[1] + 10))
-
+        if remember_graph:
+            store_graph()
+            draw_bezier(paths)
+        elif calculate_graph:
+            print("CALCULATING GRAPH")
+            render_graph()
+            while calculate_graph and running:
+                check_events()
+                pygame.display.flip()
+                clock.tick(60)
+        else:
+            draw_bezier(paths)
+        
         pygame.display.flip()
         clock.tick(60)
 
