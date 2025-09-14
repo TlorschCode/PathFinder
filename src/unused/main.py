@@ -2,7 +2,7 @@ import pygame
 import sys
 import numpy as np
 from PIL import Image
-from runner import Runner  # <-- import your Runner class here
+from unused.runner import Runner  # <-- import your Runner class here
 
 # === CONFIG ===
 IMAGE_FILE = "CrashSite.png"

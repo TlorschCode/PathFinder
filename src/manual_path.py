@@ -7,16 +7,40 @@ from path_save import saved_paths
 from bezier_classes import Path, Location
 import copy
 
-# --- CONFIG ---
-IMAGE_FILE = "CrashSite.png"
-PATH_SAVE_FILE = "path_save.py"
 
-CLIMB_SPEED = 300       # Seconds per foot (used for gray penalty)
-PX_PER_FOOT = 9.143999
+#|  --- INFO ---  |#
+'''
+The size of one meter (one grid square) is ~27.15px, with ~0.02px of imprecision
+There are 8.27531973 pixels per foot, with ~0.000000005px of imprecision
+
+Clear ground has a movement speed of        0.64mph, or 0.9386667ft/s
+Terrain with debris has a movement speed of 0.06mph, or 0.088ft/s
+
+Orange terrain is 1 foot high
+Purple terrain is 2.5 feet high
+Blue terrain is   4 feet high
+Gray terrain is impassible
+
+Orange terrain has an RGB identifier of:  (250, 110, 51)
+Purple terrain has an RGB identfier of:   (142, 59, 230)
+Blue terrain has an RGB identifier of:    (43, 186, 247)
+Gray terrain has an RGB identifier of:    (63, 63, 63)
+
+Given that no robot width was specified, no robot width is taken into account
+'''
+
+
+# --- CONFIG ---
+IMAGE_FILE = "src/CrashSite.png"
+PATH_SAVE_FILE = "src/path_save.py"
+BEST_PATH_FILE = "src/best_path.py"
+
+CLIMB_SPEED = 300       # Seconds per foot
+PX_PER_FOOT = 8.27531973
 MOVE_MULT = 0.64        # Normal speed on clear ground (mph)
 DEBRIS_SPEED = 0.06     # Speed on debris (mph)
 
-ground_colors = {"CLEAR": 0.0, "ORANGE": 1, "PURPLE": 2.5, "BLUE": 4, "GRAY": 10}
+ground_colors = {"CLEAR": 0.0, "ORANGE": 1, "PURPLE": 2.5, "BLUE": 4, "GRAY": 9999}
 
 COLOR_MAP = {
     (250, 110, 51): "ORANGE",
@@ -54,6 +78,13 @@ def map_value(x, in_min, in_max, out_min, out_max):
     if in_max - in_min == 0:  # avoid divide by zero
         raise ValueError("in_min and in_max cannot be the same")
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
+
+def get_key(val_, dict_: dict):
+    for key, value in dict_.items():
+        if value == val_:
+            return key
+    return None
 
 
 #|  --- TERRAIN FUNCTIONS ---  |#
@@ -97,65 +128,83 @@ def get_bezier_loc(level_, t_) -> Location:
         lvl = next_level
     return Location(int(round(lvl[0].x)), int(round(lvl[0].y)))
 
+def get_pixel_status(prev_tile, current_tile):
+    """
+    Returns the color of the current tile
+    """
 
-def path_score(path: Path, curve_steps=500):
-    global terrain, width, height
+    if current_tile == "GRAY":
+        status = "IMPASSIBLE"
+    elif ground_colors[current_tile] - ground_colors[prev_tile] > 0:
+        status = "CLIMB"
+    elif current_tile == "CLEAR":
+        status = "CLEAR"
+    else:
+        status = "TERRAIN"
+
+    return status
+
+def get_pixel_score(prev_tile, current_tile, feet_dist):
+    """
+    Calculate movement and climb info for a single pixel.
+
+    Returns:
+        move_time: time in seconds for this pixel
+        climb_time: climbing penalty in seconds
+        status: one of 'CLEAR', 'TERRAIN', 'CLIMB', 'IMPASSIBLE'
+    """
+    speed = MOVE_MULT if current_tile == "CLEAR" else DEBRIS_SPEED
+    climb_time = max(0, CLIMB_SPEED * (ground_colors[current_tile] - ground_colors[prev_tile]))
+    move_time = feet_dist / speed
+
+    return move_time, climb_time, get_pixel_status(prev_tile, current_tile)
+
+
+def path_score(path: Path, curve_steps=500) -> float:
+    """
+    Score a path in seconds and optionally draw a highlight overlay on a surface.
+    """
     ctrl_pts = path.control_pts
     pt1 = path.path_pt1
     pt2 = path.path_pt2
 
     if not (pt1 and pt2) or len(ctrl_pts) == 0:
         return 0
+
     full_path = [pt1] + ctrl_pts + [pt2]
     total_time = 0
     prev_px, prev_py = None, None
     prev_tile = "CLEAR"
+    tile = "CLEAR"
 
     for s in range(curve_steps + 1):
         t = s / curve_steps
         loc = get_bezier_loc(full_path, t)
         px, py = loc
 
-        if not (prev_px is None or prev_py is None):
+        if prev_px is not None and prev_py is not None:
             dx, dy = px - prev_px, py - prev_py
             steps = max(abs(dx), abs(dy))
+
             for i in range(1, steps + 1):
                 x = int(round(prev_px + dx * i / steps))
                 y = int(round(prev_py + dy * i / steps))
-
                 if not (0 <= x < width and 0 <= y < height):
                     continue
 
                 tile = terrain[x + y * width]
+                pixel_dist = sqrt((x - prev_px) ** 2 + (y - prev_py) ** 2) / PX_PER_FOOT
 
-                step_dx = x - prev_px
-                step_dy = y - prev_py
-                pixel_dist = sqrt(step_dx ** 2 + step_dy ** 2)
-                feet_dist = pixel_dist / PX_PER_FOOT
+                move_time, climb_time, status = get_pixel_score(prev_tile, tile, pixel_dist)
+                total_time += move_time + climb_time
 
-                speed = MOVE_MULT if tile == "CLEAR" else DEBRIS_SPEED
-                climb_time = 0
-                if tile == "GRAY":
-                    climb_time = feet_dist * 999999
-                elif tile == "ORANGE" and ground_colors[prev_tile] < ground_colors["ORANGE"]:
-                    climb_time = feet_dist * 1
-                elif tile == "PURPLE" and ground_colors[prev_tile] < ground_colors["PURPLE"]:
-                    climb_time = feet_dist * 2.5
-                elif tile == "BLUE":
-                    climb_time = feet_dist * 4
-                move_time = feet_dist / speed
-                prev_tile = tile
-
-                total_time += climb_time + move_time
-                # --- DEBUG: print climb penalties for any non-clear tile ---
-                if tile != "CLEAR":
-                    print(f"Climb penalty on {tile} at ({x},{y}): {feet_dist:.2f} ft -> {climb_time:.2f} s")
-
-                prev_px, prev_py = x, y
+            prev_tile = tile
+            prev_px, prev_py = px, py
         else:
             prev_px, prev_py = px, py
 
     return total_time
+
 
 
 def score_all_paths(path_list, curve_steps=500):
@@ -167,50 +216,157 @@ def score_all_paths(path_list, curve_steps=500):
     return total_time
 
 
-def draw_bezier(path_list, path_color=(0, 200, 0, 255), line_size=3, draw_controllers=True):
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+def _normalize_color_tuple(col):
+    # Accepts tuples with 3 or 4 elements, floats or ints.
+    # Returns a tuple of ints clamped to 0..255 and length 3 or 4.
+    if col is None:
+        return (0, 0, 0)
+    col_list = list(col)
+    # if user passed a single int or something odd, try to coerce to 3-tuple
+    if len(col_list) == 1:
+        col_list = [col_list[0], col_list[0], col_list[0]]
+    # round and clamp
+    col_list = [int(round(c)) if isinstance(c, (int, float)) else int(c) for c in col_list]
+    col_list = [_clamp(c, 0, 255) for c in col_list]
+    if len(col_list) >= 4:
+        return tuple(col_list[:4])
+    return tuple(col_list[:3])
+
+def draw_bezier(path_list, path_color=(0, 200, 0, 255), line_size=3, draw_controllers=True, show_terrain=False):
     """
-    Draw Bezier curves and control points.
-    path_color can include alpha (R, G, B, A).
+    Draw Bezier curves and control points with defensive checks:
+     - coerce coords to ints
+     - clamp coordinates to surface bounds
+     - normalize color tuple to valid ints 0..255
+     - skip drawing when coords outside surface or terrain index invalid
     """
-    global ctrl_pt_size, screen
+    global ctrl_pt_size, screen, width, height
+
+    # Defensive: normalize incoming path_color
+    path_color = _normalize_color_tuple(path_color)
 
     # Create a temporary surface with per-pixel alpha
     temp_surf = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
 
-    main_points_color = (100, 100, 100, 255)
-    control_line_color = (160, 160, 160, 255)
-    control_point_color = (150, 150, 150, 255)
+    main_points_color = _normalize_color_tuple((100, 100, 100, 255))
+    control_line_color = _normalize_color_tuple((160, 160, 160, 255))
+    control_point_color = _normalize_color_tuple((150, 150, 150, 255))
 
     for path in path_list:
+        prev_tile = "CLEAR"
         pt1 = path.path_pt1
         pt2 = path.path_pt2
         ctrl_pts = path.control_pts
 
         if not (pt1 is None or pt2 is None):
+            # Draw control points and lines (coerce coords)
             if draw_controllers:
-                # Draw main points
-                pygame.draw.circle(temp_surf, main_points_color, tuple(pt1), ctrl_pt_size)
-                pygame.draw.circle(temp_surf, main_points_color, tuple(pt2), ctrl_pt_size)
+                try:
+                    pygame.draw.circle(temp_surf, main_points_color, (int(pt1.x), int(pt1.y)), ctrl_pt_size)
+                    pygame.draw.circle(temp_surf, main_points_color, (int(pt2.x), int(pt2.y)), ctrl_pt_size)
+                except Exception:
+                    # defensive fallback in case pt1/pt2 are tuples instead of Location
+                    try:
+                        pygame.draw.circle(temp_surf, main_points_color, (int(pt1[0]), int(pt1[1])), ctrl_pt_size)
+                        pygame.draw.circle(temp_surf, main_points_color, (int(pt2[0]), int(pt2[1])), ctrl_pt_size)
+                    except Exception:
+                        pass
 
-                # Draw control lines
                 if ctrl_pts:
-                    pygame.draw.line(temp_surf, control_line_color, tuple(pt1), tuple(ctrl_pts[0]), line_size)
-                    pygame.draw.line(temp_surf, control_line_color, tuple(pt2),
-                                     (ctrl_pts[-1].x, ctrl_pts[-1].y), line_size)
+                    # draw connector lines safely
+                    cp0 = ctrl_pts[0]
+                    try:
+                        start0 = (int(cp0.x), int(cp0.y))
+                    except Exception:
+                        start0 = (int(cp0[0]), int(cp0[1]))
+                    try:
+                        pygame.draw.line(temp_surf, control_line_color, (int(pt1.x), int(pt1.y)), start0, line_size)
+                    except Exception:
+                        pass
+
+                    cplast = ctrl_pts[-1]
+                    try:
+                        end_last = (int(cplast.x), int(cplast.y))
+                    except Exception:
+                        end_last = (int(cplast[0]), int(cplast[1]))
+                    try:
+                        pygame.draw.line(temp_surf, control_line_color, (int(pt2.x), int(pt2.y)), end_last, line_size)
+                    except Exception:
+                        pass
+
                     prev_p = ctrl_pts[0]
                     for p in ctrl_pts[1:]:
-                        pygame.draw.line(temp_surf, control_line_color, tuple(prev_p), tuple(p), line_size)
+                        try:
+                            pygame.draw.line(temp_surf, control_line_color, (int(prev_p.x), int(prev_p.y)), (int(p.x), int(p.y)), line_size)
+                        except Exception:
+                            try:
+                                pygame.draw.line(temp_surf, control_line_color, (int(prev_p[0]), int(prev_p[1])), (int(p[0]), int(p[1])), line_size)
+                            except Exception:
+                                pass
                         prev_p = p
+
                     for p in ctrl_pts:
-                        pygame.draw.circle(temp_surf, control_point_color, tuple(p), ctrl_pt_size)
+                        try:
+                            pygame.draw.circle(temp_surf, control_point_color, (int(p.x), int(p.y)), ctrl_pt_size)
+                        except Exception:
+                            try:
+                                pygame.draw.circle(temp_surf, control_point_color, (int(p[0]), int(p[1])), ctrl_pt_size)
+                            except Exception:
+                                pass
 
             # Draw Bezier curve
             full_path = [pt1] + ctrl_pts + [pt2]
             steps = 200
+            tile = "CLEAR"
             for s in range(steps + 1):
                 t = s / steps
                 draw_pos = get_bezier_loc(full_path, t)
-                pygame.draw.circle(temp_surf, path_color, (draw_pos.x, draw_pos.y), line_size)
+                # coerce to ints safely
+                # try:
+                dx = int(round(draw_pos.x))
+                dy = int(round(draw_pos.y))
+                # except Exception:
+                #     # fallback if draw_pos is a tuple (x,y)
+                #     try:
+                #         dx = int(round(draw_pos[0]))
+                #         dy = int(round(draw_pos[1]))
+                #     except Exception:
+                #         continue  # skip this point if we can't coerce coordinates
+
+                # bounds check: skip drawing points outside the screen
+                if dx < 0 or dy < 0 or dx >= screen.get_width() or dy >= screen.get_height():
+                    continue
+
+                if show_terrain:
+                    # safe terrain lookup
+                    idx = dx + (dy * width)
+                    if idx < 0 or idx >= len(terrain):
+                        color_key = "CLEAR"
+                    else:
+                        tile = terrain[idx]
+                        color_key = get_pixel_status(prev_tile, tile)
+                        prev_tile = tile
+
+                    # pick color mapping safely
+                    draw_col = (0, 0, 0)
+                    if color_key == "TERRAIN":
+                        base_color = get_key(tile, COLOR_MAP) if get_key(tile, COLOR_MAP) is not None else (0, 0, 0)
+                        if base_color:
+                            draw_col = (base_color[0] // 2, base_color[1] // 2, base_color[2] // 2)
+                    elif color_key == "CLIMB":
+                        draw_col = (255, 0, 0)
+                    elif color_key == "IMPASSIBLE":
+                        draw_col = (0, 0, 0)
+                    else:
+                        draw_col = (0, 200, 0)
+
+                    draw_col = _normalize_color_tuple(draw_col)
+                    pygame.draw.circle(temp_surf, draw_col, (dx, dy), line_size)
+                else:
+                    pygame.draw.circle(temp_surf, path_color, (dx, dy), line_size)
 
     # Blit the temp surface onto the main screen
     screen.blit(temp_surf, (0, 0))
@@ -263,9 +419,9 @@ def remove_path_pts(pos: Location | None):
 
 
 #|  --- SAVE PATH FUNCTIONS ---  |#
-def save_path() -> str:
+def format_path_save(paths_) -> str:
     output = "["
-    for path in paths:
+    for path in paths_:
         ctrl_pts_text = "["
         if len(path.control_pts) > 0:
             for pt in path.control_pts:
@@ -277,7 +433,7 @@ def save_path() -> str:
             ctrl_pts_text = "[]"
         if path.path_pt1 and path.path_pt2:
             try:
-                if paths.index(path) != len(paths) - 1:
+                if paths_.index(path) != len(paths_) - 1:
                     output += f"Path(Location{tuple(path.path_pt1)}, Location{tuple(path.path_pt2)}, {ctrl_pts_text}, {path.locked}), " # type: ignore
                 else:
                     output += f"Path(Location{tuple(path.path_pt1)}, Location{tuple(path.path_pt2)}, {ctrl_pts_text}, {path.locked})]" # type: ignore
@@ -292,7 +448,7 @@ def save_paths():
     global paths
     try:
         with open(PATH_SAVE_FILE, "w") as file:
-            file.write(f"from bezier_classes import Path, Location\nsaved_paths = {save_path()}")
+            file.write(f"from bezier_classes import Path, Location\nsaved_paths = {format_path_save(paths)}")
         print("Paths saved.")
     except Exception as e:
         print("Failed to save paths:", e)
@@ -383,16 +539,23 @@ def store_graph():
         print(f"Stored graph snapshot #{len(prev_paths)}")
 
 
+# saved_paths = [Path(Location(32, 769), Location(199, 485), [Location(161, 485)], True), Path(Location(199, 485), Location(420, 483), [Location(356, 490)], True), Path(Location(420, 482), Location(582, 349), [Location(486, 423), Location(550, 366)], True), Path(Location(582, 349), Location(764, 416), [Location(758, 282), Location(680, 368)], True), Path(Location(763, 416), Location(820, 89), [Location(879, 325), Location(717, 232), Location(842, 211), Location(953, 370), Location(784, 188)], True), Path(Location(818, 87), Location(1005, 338), [Location(804, 265)], True), Path(Location(1005, 339), Location(879, 630), [Location(902, 512), Location(862, 578)], True), Path(Location(879, 630), Location(929, 660), [Location(904, 644)], False)]
 def render_graph():
     global prev_paths
     # --- Find score bounds ---
     max_score = 0
-    min_score = 2000
+    min_score = 10000
+    best_path = []
     for path_list in prev_paths:
         cur_score = score_all_paths(path_list)
-        if 5 < cur_score < 5000:
+        if 5 < cur_score < 10000:
+            if cur_score < min_score:
+                best_path = path_list
             max_score = max(max_score, cur_score)
             min_score = min(min_score, cur_score)
+    with open(BEST_PATH_FILE, "w") as file:
+        print("SAVING BEST PATH")
+        file.write(f"from bezier_classes import Path, Location\nsaved_paths = {format_path_save(best_path)}")
     # --- Draw paths with normalized color ---
     for path_list in prev_paths:
         total_score = sum(path.score for path in path_list)
@@ -427,14 +590,15 @@ def main():
 
         # Display score next to cursor
         if hover_point and score is not None:
-            text_surf = font_obj.render(f"{score:.2f} s", True, (0, 0, 0))
+            formatted_time = f"{int(score)//3600:02}:{(int(score)%3600)//60:02}:{int(score)%60:02}"
+            text_surf = font_obj.render(f"{formatted_time}", True, (0, 0, 0))
             text_bg = pygame.Surface((text_surf.get_width() + 6, text_surf.get_height() + 4))
             text_bg.fill((255, 255, 255))
             text_bg.blit(text_surf, (3, 2))
             screen.blit(text_bg, (hover_point[0] + 10, hover_point[1] + 10))
         if remember_graph:
             store_graph()
-            draw_bezier(paths, line_size=2)
+            draw_bezier(paths, line_size=2, show_terrain=True)
         elif calculate_graph:
             print("CALCULATING GRAPH")
             render_graph()
@@ -443,7 +607,7 @@ def main():
                 pygame.display.flip()
                 clock.tick(60)
         else:
-            draw_bezier(paths, line_size=2)
+            draw_bezier(paths, line_size=2, show_terrain=True)
         
         pygame.display.flip()
         clock.tick(60)
