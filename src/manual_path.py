@@ -373,7 +373,7 @@ def draw_bezier(path_list, path_color=(0, 200, 0, 255), line_size=3, draw_contro
 
 
 def add_path_point(pos: Location | None, click: str):
-    global ctrl_pt_size, dragging_point
+    global ctrl_pt_size, dragging_point, remember_graph, calculate_graph
     if pos is None:  # Exit the function if pos is None
         return
     for path in paths:
@@ -388,17 +388,19 @@ def add_path_point(pos: Location | None, click: str):
                     dragging_point = p
                     return
             # vvv Add new point vvv
-            if pt1 is None:
-                path.setPt1(pos)
-            elif pt2 is None:
-                path.setPt2(pos)
-            elif not path.locked:
-                path.addCtrlPt(pos)
+            if not (remember_graph or calculate_graph):
+                if pt1 is None:
+                    path.setPt1(pos)
+                elif pt2 is None:
+                    path.setPt2(pos)
+                elif not path.locked:
+                    path.addCtrlPt(pos)
         # vvv Make new path vvv
         elif click.lower() == "right":
-            paths.append(Path(pos, None))
-            paths[-2].lock() # Lock previous path (wraps by using a negative index)
-            return
+            if not (remember_graph or calculate_graph):
+                paths.append(Path(pos, None))
+                paths[-2].lock() # Lock previous path (wraps by using a negative index)
+                return
 
 
 def remove_path_pts(pos: Location | None):
@@ -546,25 +548,31 @@ def render_graph():
     max_score = 0
     min_score = 10000
     best_path = []
-    for path_list in prev_paths:
-        cur_score = score_all_paths(path_list)
+
+    for path_ in prev_paths:
+        cur_score = score_all_paths(path_)
         if 5 < cur_score < 10000:
             if cur_score < min_score:
-                best_path = path_list
+                best_path = path_
             max_score = max(max_score, cur_score)
             min_score = min(min_score, cur_score)
+    best_path_idx = prev_paths.index(best_path)
+    for path_ in prev_paths:
+        for point in path_:
+            pt_idx = path_.index(point)
+            prev_paths[best_path_idx][pt_idx]
     with open(BEST_PATH_FILE, "w") as file:
         print("SAVING BEST PATH")
         file.write(f"from bezier_classes import Path, Location\nsaved_paths = {format_path_save(best_path)}")
     # --- Draw paths with normalized color ---
-    for path_list in prev_paths:
-        total_score = sum(path.score for path in path_list)
+    for path_ in prev_paths:
+        total_score = sum(path.score for path in path_)
         if min_score != max_score:
             green_val = int(map_value(total_score, min_score, max_score, 0, 255))
         else:
             green_val = 128  # fallback if all scores are the same
         display_color = (0, green_val, 0, green_val)
-        draw_bezier(path_list, display_color, 1, False)
+        draw_bezier(path_, display_color, 1, False)
 
 
 #|  --- MAIN ---  |#
