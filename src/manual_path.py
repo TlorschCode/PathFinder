@@ -30,7 +30,7 @@ Given that no robot width was specified, no robot width is taken into account
 '''
 
 
-# --- CONFIG ---
+#|  --- CONFIG ---  |#
 IMAGE_FILE = "src/CrashSite.png"
 PATH_SAVE_FILE = "src/path_save.py"
 BEST_PATH_FILE = "src/best_path.py"
@@ -128,6 +128,7 @@ def get_bezier_loc(level_, t_) -> Location:
         lvl = next_level
     return Location(int(round(lvl[0].x)), int(round(lvl[0].y)))
 
+
 def get_pixel_status(prev_tile, current_tile):
     """
     Returns the color of the current tile
@@ -143,6 +144,7 @@ def get_pixel_status(prev_tile, current_tile):
         status = "TERRAIN"
 
     return status
+
 
 def get_pixel_score(prev_tile, current_tile, feet_dist):
     """
@@ -206,7 +208,6 @@ def path_score(path: Path, curve_steps=500) -> float:
     return total_time
 
 
-
 def score_all_paths(path_list, curve_steps=500):
     global terrain, width, height
     total_time = 0
@@ -218,6 +219,7 @@ def score_all_paths(path_list, curve_steps=500):
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
 
 def _normalize_color_tuple(col):
     # Accepts tuples with 3 or 4 elements, floats or ints.
@@ -234,6 +236,7 @@ def _normalize_color_tuple(col):
     if len(col_list) >= 4:
         return tuple(col_list[:4])
     return tuple(col_list[:3])
+
 
 def draw_bezier(path_list, path_color=(0, 200, 0, 255), line_size=3, draw_controllers=True, show_terrain=False):
     """
